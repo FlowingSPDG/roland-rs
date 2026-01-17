@@ -273,11 +273,7 @@ impl Response {
         let response = response.trim();
 
         // Remove STX if present (0x02)
-        let response = if response.starts_with('\x02') {
-            &response[1..]
-        } else {
-            response
-        };
+        let response = response.strip_prefix('\x02').unwrap_or(response);
 
         // Handle ACK (0x06)
         if response == "\x06" || response == "ack" {
@@ -296,8 +292,7 @@ impl Response {
         }
 
         // Parse DTH response: DTH:address,value;
-        if response.starts_with("DTH:") {
-            let content = &response[4..];
+        if let Some(content) = response.strip_prefix("DTH:") {
             if !content.ends_with(';') {
                 return Err(RolandError::InvalidResponse);
             }
@@ -312,8 +307,7 @@ impl Response {
         }
 
         // Parse VER response: VER:product,version;
-        if response.starts_with("VER:") {
-            let content = &response[4..];
+        if let Some(content) = response.strip_prefix("VER:") {
             if !content.ends_with(';') {
                 return Err(RolandError::InvalidResponse);
             }
@@ -329,8 +323,7 @@ impl Response {
         }
 
         // Parse ERR response: ERR:code;
-        if response.starts_with("ERR:") {
-            let content = &response[4..];
+        if let Some(content) = response.strip_prefix("ERR:") {
             if !content.ends_with(';') {
                 return Err(RolandError::InvalidResponse);
             }

@@ -1,11 +1,20 @@
 # roland-rs
 
+[![CI](https://github.com/FlowingSPDG/roland-rs/workflows/CI/badge.svg)](https://github.com/FlowingSPDG/roland-rs/actions)
+[![crates.io](https://img.shields.io/crates/v/roland-rs.svg)](https://crates.io/crates/roland-rs)
+[![docs.rs](https://docs.rs/roland-rs/badge.svg)](https://docs.rs/roland-rs)
+
 Roland VR-6HD リモートコントロール用のRustライブラリ
 
 ## 概要
 
 このプロジェクトは、Roland VR-6HDのリモートコントロール機能をRustで実装したものです。
 組み込み環境での使用を想定し、コア部分を`roland-core`として独立したライブラリとして提供しています。
+
+## リンク
+
+- [crates.io](https://crates.io/crates/roland-rs)
+- [docs.rs](https://docs.rs/roland-rs)
 
 ## 公式ドキュメント
 

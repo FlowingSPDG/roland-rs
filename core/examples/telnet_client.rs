@@ -61,10 +61,10 @@ impl TelnetClient {
     pub fn connect(host: &str, port: u16) -> Result<Self, TelnetError> {
         let addr = format!("{}:{}", host, port);
         let stream = TcpStream::connect(&addr)?;
-        
+
         // Set read timeout
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        
+
         // Set write timeout
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
@@ -97,10 +97,10 @@ impl TelnetClient {
     /// Read response from device
     fn read_response(&mut self) -> Result<Response, TelnetError> {
         let mut buf = [0u8; 1024];
-        
+
         // Read data
         let n = self.stream.read(&mut buf)?;
-        
+
         if n == 0 {
             return Err(TelnetError::ConnectionClosed);
         }
@@ -111,12 +111,14 @@ impl TelnetClient {
         // Try to parse response
         // Responses typically end with ';' or control characters
         let response_str = String::from_utf8_lossy(&self.buffer);
-        
+
         // Look for complete response (ends with ';' or is a control character)
-        if response_str.ends_with(';') || 
+        if response_str.ends_with(';') ||
            response_str.contains('\x06') || // ACK
            response_str.contains('\x11') || // XON
-           response_str.contains('\x13') { // XOFF
+           response_str.contains('\x13')
+        {
+            // XOFF
             let response = Response::parse(&response_str)?;
             self.buffer.clear();
             Ok(response)
@@ -137,9 +139,12 @@ impl TelnetClient {
     /// * `Result<(), TelnetError>` - Success or error
     pub fn write_parameter(&mut self, address: &str, value: u8) -> Result<(), TelnetError> {
         let addr = Address::from_hex(address)?;
-        let cmd = Command::WriteParameter { address: addr, value };
+        let cmd = Command::WriteParameter {
+            address: addr,
+            value,
+        };
         let response = self.send_command(&cmd)?;
-        
+
         match response {
             Response::Acknowledge => Ok(()),
             Response::Error(e) => Err(TelnetError::Protocol(e)),
@@ -157,9 +162,12 @@ impl TelnetClient {
     /// * `Result<u8, TelnetError>` - Parameter value or error
     pub fn read_parameter(&mut self, address: &str, size: u32) -> Result<u8, TelnetError> {
         let addr = Address::from_hex(address)?;
-        let cmd = Command::ReadParameter { address: addr, size };
+        let cmd = Command::ReadParameter {
+            address: addr,
+            size,
+        };
         let response = self.send_command(&cmd)?;
-        
+
         match response {
             Response::Data { value, .. } => Ok(value),
             Response::Error(e) => Err(TelnetError::Protocol(e)),
@@ -174,7 +182,7 @@ impl TelnetClient {
     pub fn get_version(&mut self) -> Result<(String, String), TelnetError> {
         let cmd = Command::GetVersion;
         let response = self.send_command(&cmd)?;
-        
+
         match response {
             Response::Version { product, version } => Ok((product, version)),
             Response::Error(e) => Err(TelnetError::Protocol(e)),
@@ -193,12 +201,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let host = &args[1];
-    let port = args.get(2)
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(23);
+    let port = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(23);
 
     println!("Connecting to {}:{}...", host, port);
-    
+
     let mut client = TelnetClient::connect(host, port)?;
     println!("Connected!");
 

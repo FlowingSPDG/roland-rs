@@ -85,12 +85,12 @@ impl Address {
         if hex.len() != 6 {
             return Err(RolandError::InvalidAddress);
         }
-        
+
         // Manual hex parsing to avoid std::str dependencies
         let high = parse_hex_byte(&hex[0..2])?;
         let mid = parse_hex_byte(&hex[2..4])?;
         let low = parse_hex_byte(&hex[4..6])?;
-        
+
         Ok(Self { high, mid, low })
     }
 
@@ -117,7 +117,7 @@ fn parse_hex_byte(s: &str) -> Result<u8, RolandError> {
     if s.len() != 2 {
         return Err(RolandError::InvalidAddress);
     }
-    
+
     let mut result = 0u8;
     for ch in s.chars() {
         let digit = match ch {
@@ -135,19 +135,19 @@ fn parse_hex_byte(s: &str) -> Result<u8, RolandError> {
 fn write_hex_byte<W: fmt::Write>(w: &mut W, byte: u8) -> fmt::Result {
     let high = (byte >> 4) & 0x0F;
     let low = byte & 0x0F;
-    
+
     let high_char = if high < 10 {
         (b'0' + high) as char
     } else {
         (b'A' + high - 10) as char
     };
-    
+
     let low_char = if low < 10 {
         (b'0' + low) as char
     } else {
         (b'A' + low - 10) as char
     };
-    
+
     w.write_char(high_char)?;
     w.write_char(low_char)
 }
@@ -271,7 +271,7 @@ impl Response {
     /// Requires `alloc` for String allocation in Version response.
     pub fn parse(response: &str) -> Result<Self, RolandError> {
         let response = response.trim();
-        
+
         // Remove STX if present (0x02)
         let response = if response.starts_with('\x02') {
             &response[1..]
@@ -358,7 +358,8 @@ fn parse_decimal_u8(s: &str) -> Result<u8, RolandError> {
             '0'..='9' => ch as u8 - b'0',
             _ => return Err(RolandError::InvalidResponse),
         };
-        result = result.checked_mul(10)
+        result = result
+            .checked_mul(10)
             .and_then(|r| r.checked_add(digit))
             .ok_or(RolandError::InvalidResponse)?;
     }

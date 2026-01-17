@@ -7,3 +7,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Shugo Kawamura"]
+
+[package]
+name = "roland-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Rust library for Roland VR-6HD remote control (std environment)"
+repository = "https://github.com/FlowingSPDG/roland-rs"
+
+[dependencies]
+roland-core = { path = "core", version = "0.1.0" }

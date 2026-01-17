@@ -75,7 +75,7 @@ impl Address {
     ///
     /// # Example
     /// ```
-    /// use roland_core::Address;
+    /// use roland_rs_core::Address;
     /// let addr = Address::from_hex("123456").unwrap();
     /// assert_eq!(addr.high, 0x12);
     /// assert_eq!(addr.mid, 0x34);

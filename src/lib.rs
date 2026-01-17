@@ -1,7 +1,9 @@
-//! Example: Telnet client for Roland VR-6HD
+//! Rust library for Roland VR-6HD remote control
 //!
-//! This example demonstrates how to use the roland-rs-core library
-//! to communicate with a VR-6HD device via Telnet.
+//! This library provides a high-level API for communicating with
+//! Roland VR-6HD devices via Telnet (std environment).
+
+pub use roland_rs_core::*;
 
 use roland_rs_core::{Address, Command, Response, RolandError};
 use std::io::{Read, Write};
@@ -189,59 +191,4 @@ impl TelnetClient {
             _ => Err(TelnetError::Protocol(RolandError::InvalidResponse)),
         }
     }
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Example usage
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <ip_address> [port]", args[0]);
-        eprintln!("Example: {} 192.168.1.100", args[0]);
-        std::process::exit(1);
-    }
-
-    let host = &args[1];
-    let port = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(23);
-
-    println!("Connecting to {}:{}...", host, port);
-
-    let mut client = TelnetClient::connect(host, port)?;
-    println!("Connected!");
-
-    // Get version information
-    println!("\nGetting version information...");
-    match client.get_version() {
-        Ok((product, version)) => {
-            println!("Product: {}", product);
-            println!("Version: {}", version);
-        }
-        Err(e) => {
-            eprintln!("Error getting version: {}", e);
-        }
-    }
-
-    // Example: Read a parameter (address 00 00 00 = 0x000000)
-    println!("\nReading parameter at address 000000...");
-    match client.read_parameter("000000", 1) {
-        Ok(value) => {
-            println!("Value: 0x{:02X} ({})", value, value);
-        }
-        Err(e) => {
-            eprintln!("Error reading parameter: {}", e);
-        }
-    }
-
-    // Example: Write a parameter
-    // Note: Be careful with actual addresses - this is just an example
-    // println!("\nWriting parameter at address 000000...");
-    // match client.write_parameter("000000", 0x01) {
-    //     Ok(()) => {
-    //         println!("Parameter written successfully");
-    //     }
-    //     Err(e) => {
-    //         eprintln!("Error writing parameter: {}", e);
-    //     }
-    // }
-
-    Ok(())
 }

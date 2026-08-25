@@ -17,5 +17,10 @@ authors.workspace = true
 description = "Rust library for Roland VR-6HD / V-160HD remote control (std environment)"
 repository = "https://github.com/FlowingSPDG/roland-rs"
 
+[features]
+default = []
+tokio = ["dep:tokio"]
+
 [dependencies]
 roland-core = { path = "core", version = "0.1.0" }
+tokio = { version = "1", optional = true, default-features = false, features = ["io-util", "macros", "net", "rt", "time"] }

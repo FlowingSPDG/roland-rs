@@ -1,13 +1,14 @@
-//! Core library for Roland VR-6HD remote control protocol
+//! Core library for Roland video switcher remote control protocol
 //!
 //! This library provides the core functionality for communicating with
-//! Roland VR-6HD devices via LAN/RS-232 interface.
+//! Roland VR-6HD and V-160HD devices via LAN/RS-232 interface.
 //!
 //! # Features
 //!
 //! - `no_std` compatible (requires `alloc` for string operations)
 //! - Zero external dependencies
-//! - Pure protocol implementation
+//! - Pure protocol implementation (DTH / RQH / VER)
+//! - Device-specific address maps under [`devices`]
 
 #![no_std]
 
@@ -17,6 +18,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
+
+pub mod devices;
+pub mod midi;
 
 /// Error types for Roland VR-6HD communication
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +71,17 @@ pub struct Address {
 
 impl Address {
     /// Create a new address from three bytes
-    pub fn new(high: u8, mid: u8, low: u8) -> Self {
+    pub const fn new(high: u8, mid: u8, low: u8) -> Self {
         Self { high, mid, low }
+    }
+
+    /// Return a copy with `delta` added to the low byte (wrapping).
+    pub const fn offset_low(self, delta: u8) -> Self {
+        Self {
+            high: self.high,
+            mid: self.mid,
+            low: self.low.wrapping_add(delta),
+        }
     }
 
     /// Create an address from a hex string (6 hex digits)
@@ -110,6 +123,21 @@ impl Address {
         write_hex_byte(w, self.mid)?;
         write_hex_byte(w, self.low)
     }
+}
+
+/// Parse a hex byte string into a byte vector (even number of hex digits).
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, RolandError> {
+    let s = s.trim();
+    if s.is_empty() || !s.len().is_multiple_of(2) {
+        return Err(RolandError::InvalidValue);
+    }
+    let raw = s.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len() / 2);
+    for i in (0..raw.len()).step_by(2) {
+        let pair = core::str::from_utf8(&raw[i..i + 2]).map_err(|_| RolandError::InvalidValue)?;
+        bytes.push(parse_hex_byte(pair).map_err(|_| RolandError::InvalidValue)?);
+    }
+    Ok(bytes)
 }
 
 /// Parse a single hex byte (2 hex digits)
@@ -201,6 +229,11 @@ impl Command {
         format!("\x02{}", self.encode())
     }
 
+    /// Encode command terminated with LF (used by V-160HD LAN / Telnet).
+    pub fn encode_line(&self) -> String {
+        format!("{}\n", self.encode())
+    }
+
     /// Write command to a formatter
     ///
     /// This method doesn't require `alloc` and can be used in `no_std` environments
@@ -245,12 +278,19 @@ fn write_hex_u24<W: fmt::Write>(w: &mut W, value: u32) -> fmt::Result {
 pub enum Response {
     /// Acknowledge (ack)
     Acknowledge,
-    /// Data response (DTH)
+    /// Data response (DTH) with a single-byte value
     Data {
         /// SysEx address
         address: Address,
         /// Parameter value
         value: u8,
+    },
+    /// Data response (DTH) with more than one value byte (e.g. tally dump)
+    DataBlock {
+        /// SysEx address
+        address: Address,
+        /// Parameter bytes
+        bytes: Vec<u8>,
     },
     /// Version information (VER)
     Version {
@@ -275,8 +315,8 @@ impl Response {
         // Remove STX if present (0x02)
         let response = response.strip_prefix('\x02').unwrap_or(response);
 
-        // Handle ACK (0x06)
-        if response == "\x06" || response == "ack" {
+        // Handle ACK (0x06 or ASCII "ack" / "ACK")
+        if response == "\x06" || response.eq_ignore_ascii_case("ack") {
             return Ok(Response::Acknowledge);
         }
 
@@ -302,8 +342,14 @@ impl Response {
                 return Err(RolandError::InvalidResponse);
             }
             let address = Address::from_hex(parts[0])?;
-            let value = parse_hex_byte(parts[1])?;
-            return Ok(Response::Data { address, value });
+            let bytes = parse_hex_bytes(parts[1])?;
+            return match bytes.as_slice() {
+                [value] => Ok(Response::Data {
+                    address,
+                    value: *value,
+                }),
+                _ => Ok(Response::DataBlock { address, bytes }),
+            };
         }
 
         // Parse VER response: VER:product,version;
@@ -457,5 +503,29 @@ mod tests {
             Response::Error(RolandError::SyntaxError) => {}
             _ => panic!("Expected SyntaxError"),
         }
+    }
+
+    #[test]
+    fn test_parse_ack_ascii() {
+        assert_eq!(Response::parse("ACK").unwrap(), Response::Acknowledge);
+        assert_eq!(Response::parse("ack\n").unwrap(), Response::Acknowledge);
+    }
+
+    #[test]
+    fn test_parse_data_block() {
+        let resp = Response::parse("DTH:0C0000,000102;").unwrap();
+        match resp {
+            Response::DataBlock { address, bytes } => {
+                assert_eq!(address.to_hex(), "0C0000");
+                assert_eq!(bytes, alloc::vec![0x00, 0x01, 0x02]);
+            }
+            _ => panic!("Expected DataBlock"),
+        }
+    }
+
+    #[test]
+    fn test_encode_line() {
+        let cmd = Command::GetVersion;
+        assert_eq!(cmd.encode_line(), "VER;\n");
     }
 }

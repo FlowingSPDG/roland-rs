@@ -4,12 +4,14 @@
 [![crates.io](https://img.shields.io/crates/v/roland-rs.svg)](https://crates.io/crates/roland-rs)
 [![docs.rs](https://docs.rs/roland-rs/badge.svg)](https://docs.rs/roland-rs)
 
-Roland VR-6HD リモートコントロール用のRustライブラリ
+Roland VR-6HD / V-160HD リモートコントロール用のRustライブラリ
 
 ## 概要
 
-このプロジェクトは、Roland VR-6HDのリモートコントロール機能をRustで実装したものです。
+このプロジェクトは、Roland VR-6HD および V-160HD のリモートコントロール機能をRustで実装したものです。
 組み込み環境での使用を想定し、コア部分を`roland-core`として独立したライブラリとして提供しています。
+
+V-160HD のアドレスマップは公式リモート・コントロール・ガイドと [companion-module-roland-v160hd](https://github.com/bitfocus/companion-module-roland-v160hd) を参照しています。
 
 ## リンク
 
@@ -21,10 +23,22 @@ Roland VR-6HD リモートコントロール用のRustライブラリ
 プロトコルの詳細については、以下の公式ドキュメントを参照してください：
 
 - [VR-6HD リモート・コントロール・ガイド](https://static.roland.com/assets/media/pdf/VR-6HD_Control_jpn03_W.pdf)
+- [V-160HD リモート・コントロール・ガイド](https://static.roland.com/assets/media/pdf/V-160HD_Control_jpn04_W.pdf)
+
+V-160HD の LAN 制御は TCP ポート **8023**、4桁のネットワークパスワード、コマンド末尾の LF を使用します。
+
+```rust
+use roland_rs::devices::v160hd::{self, VideoSource};
+use roland_rs::TelnetClient;
+
+let mut client = TelnetClient::connect_v160hd("192.168.0.1", "0000")?;
+client.send_command(&v160hd::select_pgm(VideoSource::hdmi(1)?))?;
+client.press_and_release(v160hd::switch::CUT)?;
+```
 
 ## roland-core
 
-`roland-core`は、Roland VR-6HDとの通信プロトコルを実装したコアライブラリです。
+`roland-core`は、Roland VR-6HD / V-160HD との通信プロトコルを実装したコアライブラリです。
 
 - **`no_std`対応**: 組み込み環境で使用可能（`alloc`が必要）
 - **ゼロ外部依存**: 外部クレートに依存しない純粋なプロトコル実装

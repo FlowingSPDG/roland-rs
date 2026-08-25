@@ -1,11 +1,10 @@
-//! Rust library for Roland VR-6HD remote control
+//! Rust library for Roland video switcher remote control
 //!
-//! This library provides a high-level API for communicating with
-//! Roland VR-6HD devices via Telnet (std environment).
+//! High-level Telnet API for Roland VR-6HD and V-160HD (std environment).
 
 pub use roland_core::*;
 
-use roland_core::{Address, Command, Response, RolandError};
+use crate::devices::v160hd;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -19,6 +18,8 @@ pub enum TelnetError {
     Io(std::io::Error),
     /// Connection closed
     ConnectionClosed,
+    /// V-160HD password prompt failed or welcome message was not received
+    AuthenticationFailed,
 }
 
 impl std::fmt::Display for TelnetError {
@@ -27,6 +28,7 @@ impl std::fmt::Display for TelnetError {
             TelnetError::Protocol(e) => write!(f, "Protocol error: {}", e),
             TelnetError::Io(e) => write!(f, "I/O error: {}", e),
             TelnetError::ConnectionClosed => write!(f, "Connection closed"),
+            TelnetError::AuthenticationFailed => write!(f, "Authentication failed"),
         }
     }
 }
@@ -45,123 +47,157 @@ impl From<std::io::Error> for TelnetError {
     }
 }
 
-/// Telnet client for Roland VR-6HD
+/// Telnet client for Roland video switchers
 pub struct TelnetClient {
     stream: TcpStream,
     buffer: Vec<u8>,
+    append_newline: bool,
 }
 
 impl TelnetClient {
-    /// Connect to VR-6HD device via Telnet
-    ///
-    /// # Arguments
-    /// * `host` - IP address or hostname of the VR-6HD device
-    /// * `port` - Telnet port (default: 23)
-    ///
-    /// # Returns
-    /// * `Result<Self, TelnetError>` - Connected client or error
+    /// Connect to a device via Telnet (VR-6HD default port is 23).
     pub fn connect(host: &str, port: u16) -> Result<Self, TelnetError> {
+        Self::connect_internal(host, port, false)
+    }
+
+    /// Connect to a V-160HD (TCP 8023) and send the 4-digit LAN password.
+    pub fn connect_v160hd(host: &str, password: &str) -> Result<Self, TelnetError> {
+        Self::connect_v160hd_on_port(host, v160hd::TELNET_PORT, password)
+    }
+
+    /// Connect to a V-160HD on a custom port.
+    pub fn connect_v160hd_on_port(
+        host: &str,
+        port: u16,
+        password: &str,
+    ) -> Result<Self, TelnetError> {
+        let mut client = Self::connect_internal(host, port, true)?;
+        client.authenticate_v160hd(password)?;
+        Ok(client)
+    }
+
+    fn connect_internal(host: &str, port: u16, append_newline: bool) -> Result<Self, TelnetError> {
         let addr = format!("{}:{}", host, port);
         let stream = TcpStream::connect(&addr)?;
-
-        // Set read timeout
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-
-        // Set write timeout
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-
         Ok(Self {
             stream,
             buffer: Vec::new(),
+            append_newline,
         })
     }
 
-    /// Send a command and wait for response
-    ///
-    /// # Arguments
-    /// * `command` - Command to send
-    ///
-    /// # Returns
-    /// * `Result<Response, TelnetError>` - Response from device or error
-    pub fn send_command(&mut self, command: &Command) -> Result<Response, TelnetError> {
-        // Encode command (without STX for Telnet)
-        let cmd_str = command.encode();
-        let cmd_bytes = cmd_str.as_bytes();
-
-        // Send command
-        self.stream.write_all(cmd_bytes)?;
+    fn authenticate_v160hd(&mut self, password: &str) -> Result<(), TelnetError> {
+        let prompt = self.read_until_contains("Enter password:")?;
+        if !prompt.contains("Enter password:") {
+            return Err(TelnetError::AuthenticationFailed);
+        }
+        self.stream.write_all(password.as_bytes())?;
+        self.stream.write_all(b"\n")?;
         self.stream.flush()?;
+        let welcome = self.read_until_contains("Welcome to V-160HD.")?;
+        if !welcome.contains("Welcome to V-160HD.") {
+            return Err(TelnetError::AuthenticationFailed);
+        }
+        self.buffer.clear();
+        Ok(())
+    }
 
-        // Read response
+    fn read_until_contains(&mut self, needle: &str) -> Result<String, TelnetError> {
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = self.stream.read(&mut buf)?;
+            if n == 0 {
+                return Err(TelnetError::ConnectionClosed);
+            }
+            self.buffer.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&self.buffer);
+            if text.contains(needle) {
+                return Ok(text.into_owned());
+            }
+        }
+    }
+
+    /// Send a command and wait for a response.
+    pub fn send_command(&mut self, command: &Command) -> Result<Response, TelnetError> {
+        let cmd_str = if self.append_newline {
+            command.encode_line()
+        } else {
+            command.encode()
+        };
+        self.stream.write_all(cmd_str.as_bytes())?;
+        self.stream.flush()?;
         self.read_response()
     }
 
-    /// Read response from device
-    fn read_response(&mut self) -> Result<Response, TelnetError> {
-        let mut buf = [0u8; 1024];
-
-        // Read data
-        let n = self.stream.read(&mut buf)?;
-
-        if n == 0 {
-            return Err(TelnetError::ConnectionClosed);
+    /// Send several write commands in sequence (e.g. 14-bit PinP parameters).
+    pub fn send_commands(&mut self, commands: &[Command]) -> Result<(), TelnetError> {
+        for command in commands {
+            match self.send_command(command)? {
+                Response::Acknowledge => {}
+                Response::Error(e) => return Err(TelnetError::Protocol(e)),
+                _ => return Err(TelnetError::Protocol(RolandError::InvalidResponse)),
+            }
         }
-
-        // Append to buffer
-        self.buffer.extend_from_slice(&buf[..n]);
-
-        // Try to parse response
-        // Responses typically end with ';' or control characters
-        let response_str = String::from_utf8_lossy(&self.buffer);
-
-        // Look for complete response (ends with ';' or is a control character)
-        if response_str.ends_with(';') ||
-           response_str.contains('\x06') || // ACK
-           response_str.contains('\x11') || // XON
-           response_str.contains('\x13')
-        {
-            // XOFF
-            let response = Response::parse(&response_str)?;
-            self.buffer.clear();
-            Ok(response)
-        } else {
-            // Incomplete response, wait a bit and try again
-            std::thread::sleep(Duration::from_millis(100));
-            self.read_response()
-        }
+        Ok(())
     }
 
-    /// Write a parameter value
-    ///
-    /// # Arguments
-    /// * `address` - SysEx address (3 bytes as hex string, e.g., "123456")
-    /// * `value` - Value to write (0-255)
-    ///
-    /// # Returns
-    /// * `Result<(), TelnetError>` - Success or error
-    pub fn write_parameter(&mut self, address: &str, value: u8) -> Result<(), TelnetError> {
-        let addr = Address::from_hex(address)?;
-        let cmd = Command::WriteParameter {
-            address: addr,
-            value,
-        };
-        let response = self.send_command(&cmd)?;
+    /// Press then release a V-160HD panel switch.
+    pub fn press_and_release(&mut self, sw: Address) -> Result<(), TelnetError> {
+        self.send_write(&v160hd::press_switch(sw))?;
+        std::thread::sleep(Duration::from_millis(200));
+        self.send_write(&v160hd::release_switch(sw))?;
+        Ok(())
+    }
 
-        match response {
+    fn send_write(&mut self, command: &Command) -> Result<(), TelnetError> {
+        match self.send_command(command)? {
             Response::Acknowledge => Ok(()),
             Response::Error(e) => Err(TelnetError::Protocol(e)),
             _ => Err(TelnetError::Protocol(RolandError::InvalidResponse)),
         }
     }
 
-    /// Read a parameter value
-    ///
-    /// # Arguments
-    /// * `address` - SysEx address (3 bytes as hex string, e.g., "123456")
-    /// * `size` - Size to read (typically 1 for single byte)
-    ///
-    /// # Returns
-    /// * `Result<u8, TelnetError>` - Parameter value or error
+    fn read_response(&mut self) -> Result<Response, TelnetError> {
+        let mut buf = [0u8; 1024];
+        let n = self.stream.read(&mut buf)?;
+
+        if n == 0 {
+            return Err(TelnetError::ConnectionClosed);
+        }
+
+        self.buffer.extend_from_slice(&buf[..n]);
+        let response_str = String::from_utf8_lossy(&self.buffer);
+        let trimmed = response_str.trim();
+
+        let complete = trimmed.ends_with(';')
+            || trimmed.contains('\x06')
+            || trimmed.contains('\x11')
+            || trimmed.contains('\x13')
+            || trimmed.eq_ignore_ascii_case("ack");
+
+        if complete {
+            let response = Response::parse(&response_str)?;
+            self.buffer.clear();
+            Ok(response)
+        } else {
+            std::thread::sleep(Duration::from_millis(100));
+            self.read_response()
+        }
+    }
+
+    /// Write a parameter value.
+    pub fn write_parameter(&mut self, address: &str, value: u8) -> Result<(), TelnetError> {
+        let addr = Address::from_hex(address)?;
+        let cmd = Command::WriteParameter {
+            address: addr,
+            value,
+        };
+        self.send_write(&cmd)
+    }
+
+    /// Read a parameter value.
     pub fn read_parameter(&mut self, address: &str, size: u32) -> Result<u8, TelnetError> {
         let addr = Address::from_hex(address)?;
         let cmd = Command::ReadParameter {
@@ -177,10 +213,7 @@ impl TelnetClient {
         }
     }
 
-    /// Get version information
-    ///
-    /// # Returns
-    /// * `Result<(String, String), TelnetError>` - (product, version) or error
+    /// Get version information.
     pub fn get_version(&mut self) -> Result<(String, String), TelnetError> {
         let cmd = Command::GetVersion;
         let response = self.send_command(&cmd)?;

@@ -325,9 +325,9 @@ pub fn read_tally_dump() -> Command {
 pub fn tally_updates(response: &crate::Response) -> Option<alloc::vec::Vec<(u8, TallyState)>> {
     use crate::Response;
     match response {
-        Response::Data { address, value } if address.high == 0x0C && address.mid == 0x00 => {
-            Some(alloc::vec![(address.low, TallyState::from_u8(*value).ok()?)])
-        }
+        Response::Data { address, value } if address.high == 0x0C && address.mid == 0x00 => Some(
+            alloc::vec![(address.low, TallyState::from_u8(*value).ok()?)],
+        ),
         Response::DataBlock { address, bytes } if address.high == 0x0C && address.mid == 0x00 => {
             Some(
                 bytes

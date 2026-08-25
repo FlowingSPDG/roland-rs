@@ -113,10 +113,10 @@ impl TelnetClient {
         let response_str = String::from_utf8_lossy(&self.buffer);
 
         // Look for complete response (ends with ';' or is a control character)
-        if response_str.ends_with(';') ||
-           response_str.contains('\x06') || // ACK
-           response_str.contains('\x11') || // XON
-           response_str.contains('\x13')
+        if response_str.ends_with(';')
+            || response_str.contains('\x06') // ACK
+            || response_str.contains('\x11') // XON
+            || response_str.contains('\x13')
         {
             // XOFF
             let response = Response::parse(&response_str)?;

@@ -97,4 +97,31 @@ mod tests {
         let cmd = subscribe_tally(true);
         assert_eq!(cmd.encode(), "DTH:0C0100,01;");
     }
+
+    #[test]
+    fn tally_dump_request_is_16_bytes() {
+        assert_eq!(read_tally_dump().encode(), "RQH:0C0000,000010;");
+    }
+
+    #[test]
+    fn tally_updates_parses_dump() {
+        let response = crate::Response::parse("DTH:0C0000,00010203;").unwrap();
+        let updates = tally_updates(&response).unwrap();
+        assert_eq!(updates[0], (0, TallyState::Off));
+        assert_eq!(updates[1], (1, TallyState::Program));
+        assert_eq!(updates[2], (2, TallyState::Preview));
+        assert_eq!(updates[3], (3, TallyState::Both));
+    }
+
+    #[test]
+    fn tally_state_bus_membership() {
+        assert!(TallyState::Program.is_program());
+        assert!(!TallyState::Program.is_preview());
+        assert!(TallyState::Preview.is_preview());
+        assert!(!TallyState::Preview.is_program());
+        assert!(TallyState::Both.is_program());
+        assert!(TallyState::Both.is_preview());
+        assert!(!TallyState::Off.is_program());
+        assert!(!TallyState::Off.is_preview());
+    }
 }

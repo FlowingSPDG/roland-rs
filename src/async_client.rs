@@ -1,5 +1,6 @@
 use crate::devices::v160hd;
-use crate::{is_complete_telnet_response, Address, Command, Response, RolandError, TelnetError};
+use crate::{Address, Command, Response, RolandError, TelnetError};
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -11,6 +12,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct AsyncTelnetClient {
     stream: TcpStream,
     buffer: Vec<u8>,
+    pending: VecDeque<Response>,
     append_newline: bool,
 }
 
@@ -50,6 +52,7 @@ impl AsyncTelnetClient {
         Ok(Self {
             stream,
             buffer: Vec::new(),
+            pending: VecDeque::new(),
             append_newline,
         })
     }
@@ -106,7 +109,22 @@ impl AsyncTelnetClient {
         })
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timed out"))??;
-        self.read_response().await
+        loop {
+            let response = self.read_response().await?;
+            if is_tally_notify(&response) && !command_expects_tally(command) {
+                self.pending.push_back(response);
+                continue;
+            }
+            return Ok(response);
+        }
+    }
+
+    /// Wait for the next incoming response, including unsolicited tally DTH.
+    pub async fn recv(&mut self) -> Result<Response, TelnetError> {
+        if let Some(pending) = self.pending.pop_front() {
+            return Ok(pending);
+        }
+        self.read_frame(None).await
     }
 
     /// Send several write commands in sequence (e.g. 14-bit PinP parameters).
@@ -138,26 +156,28 @@ impl AsyncTelnetClient {
     }
 
     async fn read_response(&mut self) -> Result<Response, TelnetError> {
-        loop {
-            let mut buf = [0u8; 1024];
-            let n = timeout(IO_TIMEOUT, self.stream.read(&mut buf))
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::TimedOut, "read timed out")
-                })??;
+        self.read_frame(Some(IO_TIMEOUT)).await
+    }
 
+    async fn read_frame(&mut self, io_timeout: Option<Duration>) -> Result<Response, TelnetError> {
+        loop {
+            if let Some(frame) = take_complete_frame(&mut self.buffer) {
+                return Response::parse(&frame).map_err(TelnetError::from);
+            }
+            let mut buf = [0u8; 1024];
+            let n = if let Some(limit) = io_timeout {
+                timeout(limit, self.stream.read(&mut buf))
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "read timed out")
+                    })??
+            } else {
+                self.stream.read(&mut buf).await?
+            };
             if n == 0 {
                 return Err(TelnetError::ConnectionClosed);
             }
-
             self.buffer.extend_from_slice(&buf[..n]);
-            let response_str = String::from_utf8_lossy(&self.buffer);
-
-            if is_complete_telnet_response(&response_str) {
-                let response = Response::parse(&response_str)?;
-                self.buffer.clear();
-                return Ok(response);
-            }
         }
     }
 
@@ -200,6 +220,48 @@ impl AsyncTelnetClient {
     }
 }
 
+fn take_complete_frame(buffer: &mut Vec<u8>) -> Option<String> {
+    let s = std::str::from_utf8(buffer).ok()?;
+    let start = s.find(|c: char| !c.is_whitespace())?;
+    let rest = &s[start..];
+    if rest.len() >= 3 && rest[..3].eq_ignore_ascii_case("ack") {
+        let mut end = start + 3;
+        while end < s.len() && matches!(s.as_bytes()[end], b'\r' | b'\n' | b' ' | b'\t') {
+            end += 1;
+            if buffer[end - 1] == b'\n' {
+                break;
+            }
+        }
+        buffer.drain(..end);
+        return Some("ACK".to_string());
+    }
+    let rel = rest.find(';')?;
+    let end = start + rel + 1;
+    let frame = s[start..end].to_string();
+    let mut drain_to = end;
+    while drain_to < s.len() && matches!(s.as_bytes()[drain_to], b'\r' | b'\n') {
+        drain_to += 1;
+    }
+    buffer.drain(..drain_to);
+    Some(frame)
+}
+
+fn is_tally_notify(response: &Response) -> bool {
+    match response {
+        Response::Data { address, .. } | Response::DataBlock { address, .. } => {
+            address.high == 0x0C && address.mid == 0x00
+        }
+        _ => false,
+    }
+}
+
+fn command_expects_tally(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::ReadParameter { address, .. } if address.high == 0x0C && address.mid == 0x00
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +299,16 @@ mod tests {
             .unwrap();
         assert!(matches!(response, Response::Acknowledge));
         server.await.unwrap();
+    }
+
+    #[test]
+    fn take_complete_frame_splits_ack_and_dth() {
+        let mut buf = b"ACK\nDTH:0C0000,0001;\n".to_vec();
+        assert_eq!(take_complete_frame(&mut buf).as_deref(), Some("ACK"));
+        assert_eq!(
+            take_complete_frame(&mut buf).as_deref(),
+            Some("DTH:0C0000,0001;")
+        );
+        assert!(buf.is_empty() || buf.iter().all(|b| b.is_ascii_whitespace()));
     }
 }

@@ -313,6 +313,37 @@ pub fn read_tally(source: TallySource) -> Command {
     }
 }
 
+/// Read the 16-byte HDMI/SDI tally dump (`0C0000`).
+pub fn read_tally_dump() -> Command {
+    Command::ReadParameter {
+        address: Address::new(0x0C, 0x00, 0x00),
+        size: 16,
+    }
+}
+
+/// Parse a tally DTH notification or dump into `(source_index, state)` pairs.
+pub fn tally_updates(response: &crate::Response) -> Option<alloc::vec::Vec<(u8, TallyState)>> {
+    use crate::Response;
+    match response {
+        Response::Data { address, value } if address.high == 0x0C && address.mid == 0x00 => Some(
+            alloc::vec![(address.low, TallyState::from_u8(*value).ok()?)],
+        ),
+        Response::DataBlock { address, bytes } if address.high == 0x0C && address.mid == 0x00 => {
+            Some(
+                bytes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, b)| {
+                        let idx = address.low.wrapping_add(i as u8);
+                        TallyState::from_u8(*b).ok().map(|state| (idx, state))
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
 /// Run macro 1–100.
 pub fn run_macro(n: u8) -> Result<Command, RolandError> {
     match n {

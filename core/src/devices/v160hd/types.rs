@@ -615,6 +615,8 @@ pub enum TallyState {
     Off = 0x00,
     Program = 0x01,
     Preview = 0x02,
+    /// On both Program and Preview (e.g. during a transition).
+    Both = 0x03,
 }
 
 impl TallyState {
@@ -623,7 +625,18 @@ impl TallyState {
             0 => Ok(Self::Off),
             1 => Ok(Self::Program),
             2 => Ok(Self::Preview),
+            3 => Ok(Self::Both),
             _ => Err(RolandError::OutOfRange),
         }
+    }
+
+    /// `Program` or `Both` (on-air, including during a transition).
+    pub const fn is_program(self) -> bool {
+        matches!(self, Self::Program | Self::Both)
+    }
+
+    /// `Preview` or `Both`.
+    pub const fn is_preview(self) -> bool {
+        matches!(self, Self::Preview | Self::Both)
     }
 }

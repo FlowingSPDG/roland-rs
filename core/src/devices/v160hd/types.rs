@@ -629,4 +629,14 @@ impl TallyState {
             _ => Err(RolandError::OutOfRange),
         }
     }
+
+    /// `Program` or `Both` (on-air, including during a transition).
+    pub const fn is_program(self) -> bool {
+        matches!(self, Self::Program | Self::Both)
+    }
+
+    /// `Preview` or `Both`.
+    pub const fn is_preview(self) -> bool {
+        matches!(self, Self::Preview | Self::Both)
+    }
 }

@@ -112,4 +112,16 @@ mod tests {
         assert_eq!(updates[2], (2, TallyState::Preview));
         assert_eq!(updates[3], (3, TallyState::Both));
     }
+
+    #[test]
+    fn tally_state_bus_membership() {
+        assert!(TallyState::Program.is_program());
+        assert!(!TallyState::Program.is_preview());
+        assert!(TallyState::Preview.is_preview());
+        assert!(!TallyState::Preview.is_program());
+        assert!(TallyState::Both.is_program());
+        assert!(TallyState::Both.is_preview());
+        assert!(!TallyState::Off.is_program());
+        assert!(!TallyState::Off.is_preview());
+    }
 }

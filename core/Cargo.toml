@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Core library for Roland VR-6HD / V-160HD remote control protocol"
+description = "Core library for Roland VR-6HD / V-160HD / V-60HD remote control protocol"
 repository = "https://github.com/FlowingSPDG/roland-rs"
 
 [dependencies]

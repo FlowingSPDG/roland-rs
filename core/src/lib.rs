@@ -1,14 +1,15 @@
 //! Core library for Roland video switcher remote control protocol
 //!
 //! This library provides the core functionality for communicating with
-//! Roland VR-6HD and V-160HD devices via LAN/RS-232 interface.
+//! Roland VR-6HD, V-160HD, and V-60HD devices via LAN/RS-232.
 //!
 //! # Features
 //!
 //! - `no_std` compatible (requires `alloc` for string operations)
 //! - Zero external dependencies
-//! - Pure protocol implementation (DTH / RQH / VER)
-//! - Device-specific address maps under [`devices`]
+//! - VR-6HD / V-160HD: DTH / RQH / VER
+//! - V-60HD: STX-framed 3-letter opcodes (see [`devices::v60hd`])
+//! - Device-specific maps under [`devices`]
 
 #![no_std]
 

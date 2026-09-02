@@ -50,6 +50,13 @@ client.send(&v60hd::pgm(Channel::Sdi1))?;
 client.send(&v60hd::cut())?;
 ```
 
+Firmware 3.02 (LAN) notes from hardware check:
+
+- Wait for ACK, then drain a possible **duplicate ACK** before the next command.
+- Poll `TLY;` (8 lamps: Red=PGM, Green=PST) and `QPL:7` (PGM/PST/AUX/PinP-SPLIT/DSK/OUTPUT FADE). Unsolicited TLY/QPL was not observed.
+- `ACS` did not return ACK or a payload within 2s — do not block a command queue on it.
+- Out-of-range `PGM:99` returns `ERR` (parameter out of range) once leftover ACKs are drained.
+
 ## roland-core
 
 `roland-core`は、Roland VR-6HD / V-160HD / V-60HD との通信プロトコルを実装したコアライブラリです。

@@ -4,7 +4,9 @@
 //! **STX (0x02)** and a trailing `;`. STX is required on LAN as well as RS-232.
 //! After each command the controller must wait for ACK (`0x06`) before sending
 //! the next one; some queries (notably `VER`) may omit ACK and return a `;`
-//! payload only.
+//! payload only. Firmware 3.02 on LAN may emit a **second ACK**; clients drain
+//! it. `TLY` / `QPL` are polled — the unit does not push unsolicited frames in
+//! 250ms after CUT/PGM. `ACS` timed out with no reply on 3.02 LAN.
 //!
 //! Command tables follow the official *V-60HD Reference Manual* (LAN/RS-232)
 //! and [companion-module-roland-v60hd](https://github.com/bitfocus/companion-module-roland-v60hd).

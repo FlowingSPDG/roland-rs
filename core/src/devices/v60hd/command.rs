@@ -25,6 +25,14 @@ impl Command {
         Self { opcode, args }
     }
 
+    /// Escape hatch for a 3-letter opcode (used by hardware probes and tests).
+    pub fn custom(opcode: &'static str, args: Vec<i32>) -> Result<Self, crate::RolandError> {
+        if opcode.len() != 3 || !opcode.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return Err(crate::RolandError::InvalidValue);
+        }
+        Ok(Self { opcode, args })
+    }
+
     /// Three-letter opcode (`PGM`, `CUT`, …).
     pub fn opcode(&self) -> &'static str {
         self.opcode
@@ -272,7 +280,10 @@ pub fn tly() -> Command {
     Command::simple("TLY")
 }
 
-/// Query device status (`ACS`). Payload layout is firmware-dependent.
+/// Query device status (`ACS`).
+///
+/// Firmware 3.02 on LAN did not return ACK or a payload within 2s; treat as
+/// optional and do not block a command queue on it.
 pub fn acs() -> Command {
     Command::simple("ACS")
 }

@@ -47,7 +47,7 @@ impl V60HdClient {
                     Response::Acknowledge => continue,
                     Response::Error(e) => return Err(TelnetError::Protocol(e)),
                     other => {
-                        self.drain_buffered_ack();
+                        self.drain_trailing_ack();
                         return Ok(other);
                     }
                 }
@@ -55,7 +55,10 @@ impl V60HdClient {
         } else {
             loop {
                 match self.read_parsed_frame()? {
-                    Response::Acknowledge => return Ok(Response::Acknowledge),
+                    Response::Acknowledge => {
+                        self.drain_trailing_ack();
+                        return Ok(Response::Acknowledge);
+                    }
                     Response::Error(e) => return Err(TelnetError::Protocol(e)),
                     other => self.pending.push_back(other),
                 }
@@ -64,11 +67,20 @@ impl V60HdClient {
     }
 
     /// Take a previously queued unsolicited response, or wait for the next frame.
+    /// Duplicate ACKs from the device are skipped.
     pub fn recv(&mut self) -> Result<Response, TelnetError> {
-        if let Some(pending) = self.pending.pop_front() {
-            return Ok(pending);
+        loop {
+            if let Some(pending) = self.pending.pop_front() {
+                if matches!(pending, Response::Acknowledge) {
+                    continue;
+                }
+                return Ok(pending);
+            }
+            match self.read_parsed_frame()? {
+                Response::Acknowledge => continue,
+                other => return Ok(other),
+            }
         }
-        self.read_parsed_frame()
     }
 
     /// `VER;` → product name and version string.
@@ -104,6 +116,33 @@ impl V60HdClient {
         if v60hd::next_is_ack(&self.buffer) {
             let _ = take_frame(&mut self.buffer);
         }
+    }
+
+    fn drain_trailing_ack(&mut self) {
+        self.drain_buffered_ack();
+        let _ = self
+            .stream
+            .set_read_timeout(Some(Duration::from_millis(40)));
+        let mut buf = [0u8; 256];
+        match self.stream.read(&mut buf) {
+            Ok(0) => {}
+            Ok(n) => {
+                self.buffer.extend_from_slice(&buf[..n]);
+                while let Some(frame) = take_frame(&mut self.buffer) {
+                    match v60hd::parse(&frame) {
+                        Ok(Response::Acknowledge) => {}
+                        Ok(other) => self.pending.push_back(other),
+                        Err(_) => break,
+                    }
+                }
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => {}
+        }
+        let _ = self.stream.set_read_timeout(Some(Duration::from_secs(5)));
+        self.drain_buffered_ack();
     }
 
     fn read_parsed_frame(&mut self) -> Result<Response, TelnetError> {

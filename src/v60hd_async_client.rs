@@ -51,7 +51,7 @@ impl AsyncV60HdClient {
                     Response::Acknowledge => continue,
                     Response::Error(e) => return Err(TelnetError::Protocol(e)),
                     other => {
-                        self.drain_buffered_ack();
+                        self.drain_trailing_ack().await;
                         return Ok(other);
                     }
                 }
@@ -59,7 +59,10 @@ impl AsyncV60HdClient {
         } else {
             loop {
                 match self.read_parsed_frame().await? {
-                    Response::Acknowledge => return Ok(Response::Acknowledge),
+                    Response::Acknowledge => {
+                        self.drain_trailing_ack().await;
+                        return Ok(Response::Acknowledge);
+                    }
                     Response::Error(e) => return Err(TelnetError::Protocol(e)),
                     other => self.pending.push_back(other),
                 }
@@ -68,11 +71,20 @@ impl AsyncV60HdClient {
     }
 
     /// Take a previously queued unsolicited response, or wait for the next frame.
+    /// Duplicate ACKs from the device are skipped.
     pub async fn recv(&mut self) -> Result<Response, TelnetError> {
-        if let Some(pending) = self.pending.pop_front() {
-            return Ok(pending);
+        loop {
+            if let Some(pending) = self.pending.pop_front() {
+                if matches!(pending, Response::Acknowledge) {
+                    continue;
+                }
+                return Ok(pending);
+            }
+            match self.read_parsed_frame().await? {
+                Response::Acknowledge => continue,
+                other => return Ok(other),
+            }
         }
-        self.read_parsed_frame().await
     }
 
     /// `VER;` → product name and version string.
@@ -107,6 +119,15 @@ impl AsyncV60HdClient {
     fn drain_buffered_ack(&mut self) {
         if v60hd::next_is_ack(&self.buffer) {
             let _ = take_frame(&mut self.buffer);
+        }
+    }
+
+    async fn drain_trailing_ack(&mut self) {
+        self.drain_buffered_ack();
+        match timeout(Duration::from_millis(40), self.read_parsed_frame()).await {
+            Ok(Ok(Response::Acknowledge)) => self.drain_buffered_ack(),
+            Ok(Ok(other)) => self.pending.push_back(other),
+            _ => {}
         }
     }
 
@@ -147,7 +168,7 @@ mod tests {
 
             let n = socket.read(&mut buf).await.unwrap();
             assert_eq!(&buf[..n], v60hd::cut().encode_bytes());
-            socket.write_all(&[v60hd::ACK]).await.unwrap();
+            socket.write_all(&[v60hd::ACK, v60hd::ACK]).await.unwrap();
 
             let n = socket.read(&mut buf).await.unwrap();
             assert_eq!(&buf[..n], v60hd::tly().encode_bytes());

@@ -1,17 +1,25 @@
 //! Rust library for Roland video switcher remote control
 //!
-//! High-level Telnet API for Roland VR-6HD and V-160HD (std environment).
-//! Enable the `tokio` feature for [`AsyncTelnetClient`].
+//! High-level Telnet API for Roland VR-6HD, V-160HD, and V-60HD (std environment).
+//! Enable the `tokio` feature for [`AsyncTelnetClient`] and [`AsyncV60HdClient`].
 
 pub use roland_core::*;
 
 mod sync_client;
 pub use sync_client::TelnetClient;
 
+mod v60hd_client;
+pub use v60hd_client::V60HdClient;
+
 #[cfg(feature = "tokio")]
 mod async_client;
 #[cfg(feature = "tokio")]
 pub use async_client::AsyncTelnetClient;
+
+#[cfg(feature = "tokio")]
+mod v60hd_async_client;
+#[cfg(feature = "tokio")]
+pub use v60hd_async_client::AsyncV60HdClient;
 
 /// Error type for Telnet client
 #[derive(Debug)]

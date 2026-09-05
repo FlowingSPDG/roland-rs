@@ -96,8 +96,11 @@ impl AsyncTelnetClient {
         }
     }
 
-    /// Send a command and wait for a response.
-    pub async fn send_command(&mut self, command: &Command) -> Result<Response, TelnetError> {
+    /// Write a command without waiting for a response.
+    ///
+    /// Used for V-160HD tally subscribe (`DTH:0C0100`), which Companion also
+    /// sends fire-and-forget because the unit may not ACK that address.
+    pub async fn write_command(&mut self, command: &Command) -> Result<(), TelnetError> {
         let cmd_str = if self.append_newline {
             command.encode_line()
         } else {
@@ -109,6 +112,12 @@ impl AsyncTelnetClient {
         })
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timed out"))??;
+        Ok(())
+    }
+
+    /// Send a command and wait for a response.
+    pub async fn send_command(&mut self, command: &Command) -> Result<Response, TelnetError> {
+        self.write_command(command).await?;
         loop {
             let response = self.read_response().await?;
             if is_tally_notify(&response) && !command_expects_tally(command) {
@@ -210,17 +219,7 @@ impl AsyncTelnetClient {
 
     /// Get version information.
     pub async fn get_version(&mut self) -> Result<(String, String), TelnetError> {
-        let cmd_str = if self.append_newline {
-            Command::GetVersion.encode_line()
-        } else {
-            Command::GetVersion.encode()
-        };
-        timeout(IO_TIMEOUT, async {
-            self.stream.write_all(cmd_str.as_bytes()).await?;
-            self.stream.flush().await
-        })
-        .await
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timed out"))??;
+        self.write_command(&Command::GetVersion).await?;
 
         let mut acks = 0u8;
         loop {

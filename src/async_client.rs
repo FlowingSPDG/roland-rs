@@ -245,6 +245,27 @@ impl AsyncTelnetClient {
 
 fn take_complete_frame(buffer: &mut Vec<u8>) -> Option<String> {
     loop {
+        if buffer.is_empty() {
+            return None;
+        }
+        // Official LAN/RS-232 control codes: STX 02H, ACK 06H, XON 11H, XOFF 13H.
+        // ASCII "ACK" also appears on some firmware. STX may prefix DTH even on Telnet.
+        match buffer[0] {
+            0x06 => {
+                buffer.drain(..1);
+                drain_crlf(buffer);
+                return Some("ACK".to_string());
+            }
+            0x02 | 0x11 | 0x13 | b' ' | b'\t' | b'\r' | b'\n' => {
+                buffer.drain(..1);
+                continue;
+            }
+            b if !b.is_ascii() => {
+                buffer.drain(..1);
+                continue;
+            }
+            _ => {}
+        }
         let s = std::str::from_utf8(buffer).ok()?;
         let start = s.find(|c: char| !c.is_whitespace())?;
         let rest = &s[start..];
@@ -276,6 +297,12 @@ fn take_complete_frame(buffer: &mut Vec<u8>) -> Option<String> {
         }
         let rel = rest.find('\n')?;
         buffer.drain(..start + rel + 1);
+    }
+}
+
+fn drain_crlf(buffer: &mut Vec<u8>) {
+    while buffer.first().is_some_and(|b| matches!(b, b'\r' | b'\n')) {
+        buffer.drain(..1);
     }
 }
 
@@ -370,6 +397,26 @@ mod tests {
         assert_eq!(
             take_complete_frame(&mut buf).as_deref(),
             Some("VER:V-160HD,1.00;")
+        );
+    }
+
+    #[test]
+    fn take_complete_frame_binary_ack_then_stx_dth() {
+        let mut buf = b"\x06\x02DTH:0C0002,02;".to_vec();
+        assert_eq!(take_complete_frame(&mut buf).as_deref(), Some("ACK"));
+        assert_eq!(
+            take_complete_frame(&mut buf).as_deref(),
+            Some("DTH:0C0002,02;")
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn take_complete_frame_stx_dth_without_newline() {
+        let mut buf = b"\x02DTH:0C0000,01;".to_vec();
+        assert_eq!(
+            take_complete_frame(&mut buf).as_deref(),
+            Some("DTH:0C0000,01;")
         );
     }
 

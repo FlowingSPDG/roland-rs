@@ -162,7 +162,8 @@ impl AsyncTelnetClient {
     async fn read_frame(&mut self, io_timeout: Option<Duration>) -> Result<Response, TelnetError> {
         loop {
             if let Some(frame) = take_complete_frame(&mut self.buffer) {
-                return Response::parse(&frame).map_err(TelnetError::from);
+                return Response::parse(&frame)
+                    .map_err(|e| TelnetError::UnexpectedResponse(format!("{e} ({frame:?})")));
             }
             let mut buf = [0u8; 1024];
             let n = if let Some(limit) = io_timeout {
@@ -209,41 +210,83 @@ impl AsyncTelnetClient {
 
     /// Get version information.
     pub async fn get_version(&mut self) -> Result<(String, String), TelnetError> {
-        let cmd = Command::GetVersion;
-        let response = self.send_command(&cmd).await?;
+        let cmd_str = if self.append_newline {
+            Command::GetVersion.encode_line()
+        } else {
+            Command::GetVersion.encode()
+        };
+        timeout(IO_TIMEOUT, async {
+            self.stream.write_all(cmd_str.as_bytes()).await?;
+            self.stream.flush().await
+        })
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timed out"))??;
 
-        match response {
-            Response::Version { product, version } => Ok((product, version)),
-            Response::Error(e) => Err(TelnetError::Protocol(e)),
-            _ => Err(TelnetError::Protocol(RolandError::InvalidResponse)),
+        let mut acks = 0u8;
+        loop {
+            let response = self.read_response().await?;
+            if is_tally_notify(&response) {
+                self.pending.push_back(response);
+                continue;
+            }
+            match response {
+                Response::Acknowledge if acks < 3 => {
+                    acks += 1;
+                    continue;
+                }
+                Response::Version { product, version } => return Ok((product, version)),
+                Response::Error(e) => return Err(TelnetError::Protocol(e)),
+                other => {
+                    return Err(TelnetError::UnexpectedResponse(format!("{other:?}")));
+                }
+            }
         }
     }
 }
 
 fn take_complete_frame(buffer: &mut Vec<u8>) -> Option<String> {
-    let s = std::str::from_utf8(buffer).ok()?;
-    let start = s.find(|c: char| !c.is_whitespace())?;
-    let rest = &s[start..];
-    if rest.len() >= 3 && rest[..3].eq_ignore_ascii_case("ack") {
-        let mut end = start + 3;
-        while end < s.len() && matches!(s.as_bytes()[end], b'\r' | b'\n' | b' ' | b'\t') {
-            end += 1;
-            if buffer[end - 1] == b'\n' {
-                break;
+    loop {
+        let s = std::str::from_utf8(buffer).ok()?;
+        let start = s.find(|c: char| !c.is_whitespace())?;
+        let rest = &s[start..];
+        if rest.len() >= 3 && rest[..3].eq_ignore_ascii_case("ack") {
+            let mut consumed = 3;
+            if rest[3..].starts_with(';') {
+                consumed += 1;
             }
+            let mut end = start + consumed;
+            while end < s.len() && matches!(s.as_bytes()[end], b'\r' | b'\n' | b' ' | b'\t') {
+                end += 1;
+                if buffer[end - 1] == b'\n' {
+                    break;
+                }
+            }
+            buffer.drain(..end);
+            return Some("ACK".to_string());
         }
-        buffer.drain(..end);
-        return Some("ACK".to_string());
+        if protocol_prefix(rest).is_some() {
+            let rel = rest.find(';')?;
+            let end = start + rel + 1;
+            let frame = s[start..end].to_string();
+            let mut drain_to = end;
+            while drain_to < s.len() && matches!(s.as_bytes()[drain_to], b'\r' | b'\n') {
+                drain_to += 1;
+            }
+            buffer.drain(..drain_to);
+            return Some(frame);
+        }
+        let rel = rest.find('\n')?;
+        buffer.drain(..start + rel + 1);
     }
-    let rel = rest.find(';')?;
-    let end = start + rel + 1;
-    let frame = s[start..end].to_string();
-    let mut drain_to = end;
-    while drain_to < s.len() && matches!(s.as_bytes()[drain_to], b'\r' | b'\n') {
-        drain_to += 1;
+}
+
+fn protocol_prefix(rest: &str) -> Option<&'static str> {
+    for prefix in ["DTH:", "VER:", "ERR:", "RQH:"] {
+        if rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            return Some(prefix);
+        }
     }
-    buffer.drain(..drain_to);
-    Some(frame)
+    None
 }
 
 fn is_tally_notify(response: &Response) -> bool {
@@ -310,5 +353,59 @@ mod tests {
             Some("DTH:0C0000,0001;")
         );
         assert!(buf.is_empty() || buf.iter().all(|b| b.is_ascii_whitespace()));
+    }
+
+    #[test]
+    fn take_complete_frame_skips_banner_before_ver() {
+        let mut buf = b"Ready\nVER:V-160HD:1.10;\n".to_vec();
+        assert_eq!(
+            take_complete_frame(&mut buf).as_deref(),
+            Some("VER:V-160HD:1.10;")
+        );
+    }
+
+    #[test]
+    fn take_complete_frame_ack_semicolon() {
+        let mut buf = b"ACK;\nVER:V-160HD,1.00;\n".to_vec();
+        assert_eq!(take_complete_frame(&mut buf).as_deref(), Some("ACK"));
+        assert_eq!(
+            take_complete_frame(&mut buf).as_deref(),
+            Some("VER:V-160HD,1.00;")
+        );
+    }
+
+    async fn spawn_ver_stub() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.write_all(b"Enter password:\n").await.unwrap();
+            let mut buf = [0u8; 32];
+            let _ = socket.read(&mut buf).await.unwrap();
+            socket
+                .write_all(b"Welcome to V-160HD.\nReady\n")
+                .await
+                .unwrap();
+            let mut cmd = [0u8; 64];
+            let n = socket.read(&mut cmd).await.unwrap();
+            assert!(std::str::from_utf8(&cmd[..n]).unwrap().contains("VER;"));
+            socket
+                .write_all(b"ACK;\nVER:V-160HD:1.10;\n")
+                .await
+                .unwrap();
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn get_version_skips_ack_and_banner() {
+        let (port, server) = spawn_ver_stub().await;
+        let mut client = AsyncTelnetClient::connect_v160hd_on_port("127.0.0.1", port, "0000")
+            .await
+            .unwrap();
+        let (product, version) = client.get_version().await.unwrap();
+        assert_eq!(product, "V-160HD");
+        assert_eq!(version, "1.10");
+        server.await.unwrap();
     }
 }

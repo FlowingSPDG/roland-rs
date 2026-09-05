@@ -316,8 +316,8 @@ impl Response {
         // Remove STX if present (0x02)
         let response = response.strip_prefix('\x02').unwrap_or(response);
 
-        // Handle ACK (0x06 or ASCII "ack" / "ACK")
-        if response == "\x06" || response.eq_ignore_ascii_case("ack") {
+        // Handle ACK (0x06 or ASCII "ack" / "ACK", optionally with ';')
+        if is_ack(response) {
             return Ok(Response::Acknowledge);
         }
 
@@ -333,7 +333,7 @@ impl Response {
         }
 
         // Parse DTH response: DTH:address,value;
-        if let Some(content) = response.strip_prefix("DTH:") {
+        if let Some(content) = strip_prefix_ci(response, "DTH:") {
             if !content.ends_with(';') {
                 return Err(RolandError::InvalidResponse);
             }
@@ -353,24 +353,20 @@ impl Response {
             };
         }
 
-        // Parse VER response: VER:product,version;
-        if let Some(content) = response.strip_prefix("VER:") {
+        // Parse VER response: VER:product,version; or VER:product:version;
+        if let Some(content) = strip_prefix_ci(response, "VER:") {
             if !content.ends_with(';') {
                 return Err(RolandError::InvalidResponse);
             }
             let content = &content[..content.len() - 1];
-            let parts: Vec<&str> = content.split(',').collect();
-            if parts.len() != 2 {
+            let Some((product, version)) = split_version_fields(content) else {
                 return Err(RolandError::InvalidResponse);
-            }
-            return Ok(Response::Version {
-                product: parts[0].to_string(),
-                version: parts[1].to_string(),
-            });
+            };
+            return Ok(Response::Version { product, version });
         }
 
         // Parse ERR response: ERR:code;
-        if let Some(content) = response.strip_prefix("ERR:") {
+        if let Some(content) = strip_prefix_ci(response, "ERR:") {
             if !content.ends_with(';') {
                 return Err(RolandError::InvalidResponse);
             }
@@ -388,6 +384,36 @@ impl Response {
 
         Err(RolandError::InvalidResponse)
     }
+}
+
+fn is_ack(response: &str) -> bool {
+    if response == "\x06" {
+        return true;
+    }
+    let response = response.strip_suffix(';').unwrap_or(response);
+    response.eq_ignore_ascii_case("ack")
+}
+
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        Some(&s[prefix.len()..])
+    } else {
+        None
+    }
+}
+
+fn split_version_fields(content: &str) -> Option<(String, String)> {
+    if let Some((product, version)) = content.split_once(',') {
+        if !product.is_empty() && !version.is_empty() {
+            return Some((product.to_string(), version.to_string()));
+        }
+    }
+    if let Some((product, version)) = content.split_once(':') {
+        if !product.is_empty() && !version.is_empty() {
+            return Some((product.to_string(), version.to_string()));
+        }
+    }
+    None
 }
 
 /// Parse a decimal u8
@@ -495,6 +521,24 @@ mod tests {
             }
             _ => panic!("Expected Version response"),
         }
+    }
+
+    #[test]
+    fn test_parse_version_colon() {
+        let resp = Response::parse("VER:V-160HD:1.10;").unwrap();
+        match resp {
+            Response::Version { product, version } => {
+                assert_eq!(product, "V-160HD");
+                assert_eq!(version, "1.10");
+            }
+            _ => panic!("Expected Version response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ack_with_semicolon() {
+        assert_eq!(Response::parse("ACK;").unwrap(), Response::Acknowledge);
+        assert_eq!(Response::parse("ack;").unwrap(), Response::Acknowledge);
     }
 
     #[test]

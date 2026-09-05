@@ -32,6 +32,8 @@ pub enum TelnetError {
     ConnectionClosed,
     /// V-160HD password prompt failed or welcome message was not received
     AuthenticationFailed,
+    /// A complete frame was read but it was not the expected protocol response.
+    UnexpectedResponse(String),
 }
 
 impl std::fmt::Display for TelnetError {
@@ -41,6 +43,9 @@ impl std::fmt::Display for TelnetError {
             TelnetError::Io(e) => write!(f, "I/O error: {}", e),
             TelnetError::ConnectionClosed => write!(f, "Connection closed"),
             TelnetError::AuthenticationFailed => write!(f, "Authentication failed"),
+            TelnetError::UnexpectedResponse(raw) => {
+                write!(f, "Unexpected response: {raw}")
+            }
         }
     }
 }
